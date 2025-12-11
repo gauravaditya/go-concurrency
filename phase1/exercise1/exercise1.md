@@ -1,4 +1,4 @@
-Build a cancellable worker that does not leak goroutines.
+# Build a cancellable worker that does not leak goroutines.
 Requirements:
 ✔️ 1. The worker reads jobs from a channel (jobs <-chan int)
 
