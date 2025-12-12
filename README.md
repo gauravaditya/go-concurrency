@@ -7,6 +7,7 @@ refresh go concurrency concepts and patterns
 This is NOT a beginner roadmap.
 
 ### Phase 1 — Master the Foundations (1–2 weeks)
+
 ✅ 1. Goroutine Lifecycle & Scheduling
 
 - M:N scheduler (G–P–M model)
@@ -39,6 +40,7 @@ Each pattern must be implemented from scratch, tested, and benchmarked.
 🔹 4. Worker Pool (bounded concurrency)
 
 Variations:
+
 - With result aggregation
 - With cancellation
 - With retries & backoff
@@ -128,4 +130,4 @@ You will build:
 - Your own rate limiter library
 - A streaming pipeline with backpressure
 - A miniature task scheduler (like a tiny Kubernetes)
-- I will review your code, identify flaws, and help you iterate.
+- I will review your code, identify flaws, and help you iterate
