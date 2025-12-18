@@ -2,6 +2,12 @@
 
 refresh go concurrency concepts and patterns
 
+## How to run an exercise code
+
+```make
+make run/phase1/exercise1 #executes the main.go for phase1 -> exercise1
+```
+
 ## 🚀 Golang Concurrency Mastery Roadmap
 
 This is NOT a beginner roadmap.
