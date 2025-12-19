@@ -12,15 +12,16 @@ func main() {
 	jobs := make(chan int)
 
 	results, scale := autoScalerPool[int, int](ctx, 3, 5, jobs)
+	ticker := time.NewTicker(200 * time.Millisecond)
 
 	go func() {
 		defer close(jobs)
-		// send jobs
-		for i := 0; i < 10; {
+
+		for i := 0; i < 1000000; {
 			select {
 			case jobs <- i:
 				i++
-			case <-time.After(time.Millisecond * 200):
+			case <-ticker.C:
 				select {
 				case <-ctx.Done():
 					return
@@ -28,8 +29,6 @@ func main() {
 					fmt.Println("scale up request sent...")
 				}
 			}
-
-			//			time.Sleep(500 * time.Millisecond)
 		}
 	}()
 

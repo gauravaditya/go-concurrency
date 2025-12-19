@@ -36,7 +36,10 @@ func newWorker[T, R any](cfg workerCfg[T, R]) *worker[T, R] {
 }
 
 func (w *worker[T, R]) run(ctx context.Context, apply func(T) R) {
+	fmt.Printf("started worker %d\n", w.cfg.id)
+
 	defer w.cfg.wg.Done()
+	ticker := time.NewTicker(200 * time.Millisecond)
 
 	for {
 		select {
@@ -45,7 +48,7 @@ func (w *worker[T, R]) run(ctx context.Context, apply func(T) R) {
 		case <-w.cfg.sigkill:
 			fmt.Printf("worker %d: received sigkill!\n", w.cfg.id)
 			return
-		case <-time.After(time.Millisecond * 200):
+		case <-ticker.C:
 			select {
 			case <-ctx.Done():
 				return
@@ -66,7 +69,6 @@ func (w *worker[T, R]) run(ctx context.Context, apply func(T) R) {
 			case w.cfg.out <- apply(data):
 			}
 		}
-		time.Sleep(1 * time.Second)
 	}
 }
 
@@ -82,6 +84,8 @@ func autoScalerPool[T, R any](
 	workers := make(map[int]workerCfg[T, R])
 	workerCount := 0
 	workerId := 1
+
+	fmt.Println("starting workers...")
 	for range minWorkers {
 		cfg := newWorkerCfg(workerId, jobs, results, lag, &wg)
 		workers[workerId] = cfg
@@ -106,7 +110,11 @@ func autoScalerPool[T, R any](
 					return
 				}
 
-				if scale > 0 && workerCount < maxWorkers {
+				switch scale > 0 {
+				case true:
+					if workerCount >= maxWorkers {
+						break
+					}
 					cfg := newWorkerCfg(workerId, jobs, results, lag, &wg)
 					workers[workerId] = cfg
 					workerId++
@@ -114,9 +122,10 @@ func autoScalerPool[T, R any](
 
 					wg.Add(1)
 					go newWorker(cfg).run(ctx, work[T, R])
-				}
-
-				if scale < 0 && workerCount > minWorkers {
+				case false:
+					if workerCount <= minWorkers {
+						break
+					}
 					id := scale * -1 // derive id of the worker
 					workers[id].sigkill <- struct{}{}
 					delete(workers, id)
@@ -141,7 +150,7 @@ func work[T, R any](t T) (r R) {
 		r = v
 		return
 	default:
-		fmt.Printf("worker %d: unknown datatype received\n")
+		fmt.Println("worker: unknown datatype received\n")
 		return
 	}
 }
