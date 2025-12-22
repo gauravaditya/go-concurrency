@@ -1,114 +1,173 @@
-package exercise5
+package main
 
 import (
 	"context"
 	"fmt"
-	"math/rand"
+	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// worker -> does an assigned work from a given source queue/channel
-// pool -> controls workers
-// autoscaler -> decides when to scale up/down
-
-type state uint
+type eventName uint
 
 const (
-	idle state = iota
-	busy
-	down
-	kill
+	job_started eventName = iota
+	job_finished
 )
 
 type event struct {
-	workerId int
-	state    state
-	message  string
-	at       time.Time
-	ack      chan struct{}
+	name eventName
+	at   time.Time
 }
 
-func newEvent(id int, s state, msg string) event {
-	return event{
-		workerId: id,
-		state:    s,
-		message:  msg,
-	}
-}
-
-type worker struct {
+type workerCfg struct {
 	id      int
 	jobs    <-chan int
 	results chan<- int
-	events  chan event
+	updates chan<- event
+	token   chan time.Duration
 	wg      *sync.WaitGroup
 }
 
-func newWorker(id int, jobs <-chan int, results chan<- int, events chan event, wg *sync.WaitGroup) *worker {
-	return &worker{
-		id:      id,
-		jobs:    jobs,
-		results: results,
-		events:  events,
-		wg:      wg,
-	}
-}
-
-func (w *worker) run(ctx context.Context) {
-	defer w.wg.Done()
+func worker(
+	ctx context.Context,
+	cfg *workerCfg,
+) {
+	defer cfg.wg.Done()
+	d := <-cfg.token // blocks till token received
+	ticker := time.NewTicker(d)
 
 	for {
 		select {
-		case e := <-w.events:
-			if e.state == kill {
-				e.ack <- struct{}{}
-				return
-			}
 		case <-ctx.Done():
-			// blocks until sent before exit
-			w.events <- newEvent(w.id, down, fmt.Sprintf("worker %d: exiting, context cancelled", w.id))
 			return
-		case data, ok := <-w.jobs:
-			if !ok {
-				// blocks until sent before exit
-				w.events <- newEvent(w.id, down, fmt.Sprintf("worker %d: exiting, jobs finished", w.id))
-				return
-			}
-
+		case <-ticker.C:
 			select {
 			case <-ctx.Done():
-				// blocks until sent before exit
-				w.events <- newEvent(w.id, down, fmt.Sprintf("worker %d: exiting, context cancelled", w.id))
 				return
-			case w.results <- data:
+			case cfg.token <- d:
+				fmt.Printf("worker %d: returned token\n", cfg.id)
+				return
+			}
+		case data, ok := <-cfg.jobs:
+			if !ok {
+				select {
+				case <-ctx.Done():
+					return
+				case cfg.token <- d:
+					fmt.Printf("worker %d: returned token\n", cfg.id)
+					return
+				}
+			}
+			fmt.Printf("worker %d: started job\n", cfg.id)
+			cfg.updates <- event{name: job_started, at: time.Now()}
+			select {
+			case <-ctx.Done():
+				select {
+				case <-ctx.Done():
+					return
+				case cfg.token <- d:
+					fmt.Printf("worker %d: returned token\n", cfg.id)
+					return
+				}
+			case cfg.results <- data:
+				fmt.Printf("worker %d: finished job\n", cfg.id)
+				cfg.updates <- event{name: job_finished, at: time.Now()}
 			}
 		}
 	}
 }
 
-type pool struct {
-	minWorkers int
-	maxWorkers int
-	jobs       <-chan int
-	workers    map[int]*worker
-}
-
-func newWorkerPool(minWorkers, maxWorkers int, jobs <-chan int) *pool {
-	return &pool{
-		minWorkers: minWorkers,
-		maxWorkers: maxWorkers,
-		jobs:       jobs,
-		workers:    make(map[int]*worker),
-	}
-}
-
-func (wp *pool) start(ctx context.Context) <-chan int {
+func autoScalerPool(
+	ctx context.Context,
+	minWorkers int,
+	maxWorkers int,
+	jobs <-chan int,
+) <-chan int {
 	results := make(chan int)
+	updates := make(chan event)
+	tokens := make(chan time.Duration, maxWorkers)
+	workers := sync.Map{}
+	var counter atomic.Int32
+	var wg sync.WaitGroup
 
-	for range wp.minWorkers {
-		w := newWorker(rand.Intn(99),jobs, results,)
+	for range minWorkers {
+		cfg := &workerCfg{
+			int(counter.Add(1)),
+			jobs,
+			results,
+			updates,
+			tokens,
+			&wg,
+		}
+		workers.Store(cfg.id, cfg)
+		wg.Add(1)
+		go worker(ctx, cfg)
 	}
+
+	for range minWorkers {
+		tokens <- time.Second * 3
+	}
+
+	wg.Add(1)
+	go func() {
+		startedAt := time.Now()
+		started, finished := 0, 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case u, ok := <-updates:
+				if !ok {
+					return
+				}
+				elapsed := time.Now().UnixMilli() - startedAt.UnixMilli()
+				switch u.name {
+				case job_started:
+					started++
+				case job_finished:
+					finished++
+				}
+
+				arrivalRate := math.Mod(float64(started), float64(elapsed))
+				completionRate := math.Mod(float64(finished), float64(elapsed))
+				if arrivalRate > completionRate {
+					tokens <- time.Second * 3
+
+					cfg := &workerCfg{
+						int(counter.Add(1)),
+						jobs,
+						results,
+						updates,
+						tokens,
+						&wg,
+					}
+					workers.Store(cfg.id, cfg)
+					wg.Add(1)
+					go worker(ctx, cfg)
+				} else {
+					<-tokens // reduce token
+				}
+			case d, ok := <-tokens:
+				if !ok {
+					return
+				}
+				tokens <- d
+
+			}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+		close(updates)
+		for range <-tokens { // drain tokens
+			fmt.Println("draining tokens...")
+		}
+		close(tokens)
+	}()
 
 	return results
 }
