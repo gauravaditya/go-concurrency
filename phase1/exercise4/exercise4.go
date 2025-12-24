@@ -150,7 +150,7 @@ func work[T, R any](t T) (r R) {
 		r = v
 		return
 	default:
-		fmt.Println("worker: unknown datatype received\n")
+		fmt.Println("worker: unknown datatype received")
 		return
 	}
 }
