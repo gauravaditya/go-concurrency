@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -13,7 +12,7 @@ type event struct {
 	workId    int
 	name      string
 	at        int64
-	timeTaken int32
+	timeTaken int64
 }
 
 func (e event) String() string {
@@ -28,9 +27,6 @@ func pool(
 ) <-chan int {
 	results := make(chan int)
 	events := make(chan event)
-	doneCh := make(chan struct{})
-
-	wg := sync.WaitGroup{}
 
 	idCounter := atomic.Int32{}
 	workerCount := atomic.Int32{}
@@ -45,10 +41,10 @@ func pool(
 	for range 1 {
 		workerCount.Add(1)
 		id := idCounter.Add(1)
-		worker(ctx, int(id), jobs, results, events, &wg, &workerCount, &desiredWorkerCount)
+		worker(ctx, int(id), jobs, results, events, &workerCount, &desiredWorkerCount)
 	}
 
-	go func(wg *sync.WaitGroup, wc *atomic.Int32, dwc *atomic.Int32) {
+	go func(wc *atomic.Int32, dwc *atomic.Int32) {
 		ticker := time.NewTicker(time.Millisecond * 500)
 		arrivalRate := 0.0
 		completionRate := 0.0
@@ -66,35 +62,30 @@ func pool(
 					completionRate = float64(jobsCompleted.Load()) * 1000 / float64(completionElapsedTime.Load())
 				}
 
-				// fmt.Printf("arrivalRate: %.8f, %.8f :completionRate, %v\n", arrivalRate, completionRate, arrivalRate > completionRate)
-			case <-doneCh:
-				fmt.Println("Done.")
-				return
-			default:
+				fmt.Println("workerCount is ->", workerCount.Load())
+				fmt.Println("arrivalRate, completionRate ->", arrivalRate, completionRate)
 				switch true {
+				case desiredWorkerCount.Load() <= 0:
+					return
 				case workerCount.Load() < desiredWorkerCount.Load():
-					fmt.Printf("need more workers: %d, %d\n", dwc.Load(), maxWorkers)
 					workerCount.Add(1)
 					id := idCounter.Add(1)
-					worker(ctx, int(id), jobs, results, events, wg, wc, dwc)
+					worker(ctx, int(id), jobs, results, events, wc, dwc)
 					fmt.Printf("added worker %d\n", id)
-				case workerCount.Load() > desiredWorkerCount.Load():
-					fmt.Printf("need less workers: %d, %d", wc.Load(), dwc.Load())
-					desiredWorkerCount.Add(-1)
 				default:
 					if completionRate > arrivalRate && desiredWorkerCount.Load() > minWorkers {
 						desiredWorkerCount.Add(-1)
 					}
-					if arrivalRate < completionRate && desiredWorkerCount.Load() < maxWorkers {
+					if arrivalRate > completionRate && desiredWorkerCount.Load() < maxWorkers {
 						desiredWorkerCount.Add(1)
 					}
 				}
 
 			}
 		}
-	}(&wg, &workerCount, &desiredWorkerCount)
+	}(&workerCount, &desiredWorkerCount)
 
-	go func(wg *sync.WaitGroup) {
+	go func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -107,21 +98,13 @@ func pool(
 				switch e.name {
 				case "received":
 					jobsReceived.Add(1)
-					receivedElapsedTime.Add(e.timeTaken)
+					receivedElapsedTime.Add(int32(e.timeTaken))
 				case "completed":
 					jobsCompleted.Add(1)
-					completionElapsedTime.Add(e.timeTaken)
+					completionElapsedTime.Add(int32(e.timeTaken))
 				}
 			}
 		}
-	}(&wg)
-
-	go func() {
-		wg.Wait()
-		doneCh <- struct{}{}
-		close(doneCh)
-		close(results)
-		close(events)
 	}()
 
 	return results
@@ -133,19 +116,20 @@ func worker(
 	jobs <-chan int,
 	results chan<- int,
 	events chan<- event,
-	wg *sync.WaitGroup,
 	currentWorkerCount *atomic.Int32,
 	desiredWorkerCount *atomic.Int32,
 ) {
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
-		lastReceivedAt := time.Now().UnixNano()
+		defer func() {
+			if currentWorkerCount.Add(-1) <= 0 {
+				close(results)
+				close(events)
+			}
+		}()
 
 		for {
 			if currentWorkerCount.Load() > desiredWorkerCount.Load() {
 				fmt.Printf("worker %d: currentWorkerCount > desiredWorkerCount\n", id)
-				currentWorkerCount.Add(-1)
 				return
 			}
 
@@ -155,6 +139,7 @@ func worker(
 			case data, ok := <-jobs:
 				if !ok {
 					fmt.Printf("worker %d: returning..\n", id)
+					desiredWorkerCount.Swap(0)
 					return
 				}
 
@@ -163,28 +148,42 @@ func worker(
 					return
 				default:
 					receivedAt := time.Now().UnixNano()
-					events <- event{
-						workerId:  id,
-						workId:    data,
-						name:      "received",
-						at:        receivedAt,
-						timeTaken: int32(receivedAt + 1 - lastReceivedAt),
+					select {
+					case <-ctx.Done():
+						return
+					case events <- newEvent(id, data, "received", receivedAt):
 					}
-					lastReceivedAt = receivedAt
 
 					// time.Sleep(500 * time.Millisecond) //work delay
 					results <- data
 
 					completedAt := time.Now().UnixNano()
-					events <- event{
-						workerId:  id,
-						workId:    data,
-						name:      "completed",
-						at:        completedAt,
-						timeTaken: int32(completedAt - receivedAt),
+					select {
+					case <-ctx.Done():
+						return
+					case events <- newEvent(id, data, "completed", completedAt):
 					}
 				}
 			}
 		}
 	}()
+}
+
+func newEvent(id, data int, eventName string, receivedAt int64) event {
+	now := time.Now().UnixNano()
+	timeTaken := int64(0)
+	switch eventName {
+	case "received":
+		timeTaken = now + 1 - receivedAt
+	case "completed":
+		timeTaken = receivedAt - now
+	}
+
+	return event{
+		workerId:  id,
+		workId:    data,
+		name:      eventName,
+		at:        receivedAt,
+		timeTaken: timeTaken,
+	}
 }

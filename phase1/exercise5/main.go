@@ -8,13 +8,13 @@ import (
 )
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
 	wg := sync.WaitGroup{}
 	jobs := make(chan int)
 
-	results := pool(ctx, 3, 5, jobs)
+	results := pool(ctx, 3, 10, jobs)
 
 	wg.Add(1)
 	go func(wg *sync.WaitGroup) {
@@ -22,7 +22,6 @@ func main() {
 		defer close(jobs)
 
 		for i := 0; i < 1000000; {
-			// time.Sleep(100 * time.Millisecond) // producer delay
 			jobs <- i
 			i++
 		}
