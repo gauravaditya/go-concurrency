@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	q := NewBlockingQueue[int](10)
+	q := NewBlockingQueue[int](5)
 
 	var wg sync.WaitGroup
 
