@@ -1,6 +1,6 @@
 So let's move directly into Phase 2.
 
-### Task 1 — Basic Worker Pool
+### Task 1 — Basic Worker Pool - Using forwarder pattern
 
 Implement from scratch:
 
