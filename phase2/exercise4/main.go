@@ -5,19 +5,11 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"go-concurrency/phase2/types"
 )
 
-type Job struct {
-	ID    int
-	Value int
-}
-
-type Result struct {
-	ID    int
-	Value int
-}
-
-func worker(ctx context.Context, jobs <-chan Job, out chan<- Result, wg *sync.WaitGroup) {
+func worker(ctx context.Context, jobs <-chan types.Job, out chan<- types.Result, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for {
@@ -32,16 +24,16 @@ func worker(ctx context.Context, jobs <-chan Job, out chan<- Result, wg *sync.Wa
 			select {
 			case <-ctx.Done():
 				return
-			case out <- Result{ID: v.ID, Value: v.Value}:
+			case out <- types.Result{ID: v.ID, Value: v.Value}:
 			}
 		}
 	}
 }
 
-func orderByID(ctx context.Context, results <-chan Result, indexOffset int) <-chan Result {
-	orderedResults := make(chan Result)
+func orderByID(ctx context.Context, results <-chan types.Result, indexOffset int) <-chan types.Result {
+	orderedResults := make(chan types.Result)
 	currentOffset := indexOffset
-	futureResults := make(map[int]Result)
+	futureResults := make(map[int]types.Result)
 
 	go func() {
 		defer close(orderedResults)
@@ -80,10 +72,10 @@ func orderByID(ctx context.Context, results <-chan Result, indexOffset int) <-ch
 func workerPool(
 	ctx context.Context,
 	workers int,
-	jobs <-chan Job,
-) <-chan Result {
+	jobs <-chan types.Job,
+) <-chan types.Result {
 	var wg sync.WaitGroup
-	result := make(chan Result)
+	result := make(chan types.Result)
 
 	for range workers {
 		wg.Add(1)
@@ -99,13 +91,13 @@ func workerPool(
 }
 
 func main() {
-	jobs := make(chan Job)
+	jobs := make(chan types.Job)
 
 	go func() {
 		defer close(jobs)
 
 		for i := 1; i <= 5000000; i++ {
-			jobs <- Job{ID: i, Value: i}
+			jobs <- types.Job{ID: i, Value: i}
 		}
 	}()
 
